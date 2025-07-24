@@ -14,7 +14,7 @@ mats = [("Fe", "鉄（1043 K）", "red"),
         ("Ni", "ニッケル（627 K）", "green"),
         ("Gd", "ガドリニウム（293 K）", "blue")]
 
-T_min, T_max, dT = 0, 1200, 20
+T_min, T_max, dT = 0, 1200, 5
 temps = list(range(T_min, T_max + dT, dT))
 
 # --- データ読み込み（キャッシュあり） ---
@@ -24,7 +24,8 @@ def load_all_data():
     data = {}
     for name, _, _ in mats:
         path = os.path.join("materials", name, "magnetization.csv")
-        data[name] = pd.read_csv(path)
+        df = pd.read_csv(path)
+        data[name] = df
     return data
 
 all_dfs = load_all_data()
@@ -59,7 +60,7 @@ with upper:
         T = temps[st.session_state.idx]
         img_path = os.path.join("materials", name, f"{T:04}.png")
         img = Image.open(img_path)
-        col.image(img, caption=f"{label}\nT = {T} K", use_column_width=True)
+        col.image(img, caption=f"{label}\nT = {T} K", use_container_width=True)
 
 # ---------------- 下段：M–T 曲線 ----------------
 with lower:
@@ -71,8 +72,8 @@ with lower:
             x=df["T_K"], y=df["M_abs"],
             mode="lines", name=label, line=dict(color=color)))
         # 現在温度位置
-        current_T = temps[st.session_state.idx]
-        # tempsのインデックスとdfのインデックスは一致するため、効率的に値を取得
+        # x座標もDataFrameから取得するように修正
+        current_T = df["T_K"][st.session_state.idx]
         current_M = df["M_abs"][st.session_state.idx]
         fig.add_trace(go.Scatter(
             x=[current_T],

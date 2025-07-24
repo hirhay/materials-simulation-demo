@@ -50,7 +50,7 @@ for name, Tc_real in mats:
     dest = f"materials/{name}"
     os.makedirs(dest, exist_ok=True)
 
-    spins = np.random.choice([-1, 1], size=(L, L))
+    spins = np.ones((L, L), dtype=np.int8)
     csv_path = os.path.join(dest, "magnetization.csv")
     with open(csv_path, "w", newline="") as f_csv:
         writer = csv.writer(f_csv)
