@@ -25,11 +25,11 @@ coords = [(i, j, k) for i in range(Ncell)
                       for k in range(Ncell)]
 pos = np.array(coords, dtype=np.float64) * a   # [N,3]
 Natoms = pos.shape[0]
+pos_initial = pos.copy()  # t=0 の初期位置を保存
 
 # ------ 速度初期化 ------
 def maxwell_vel(T):
     return np.random.normal(scale=np.sqrt(T/mass), size=(Natoms, 3))
-
 vel = maxwell_vel(temps[0])
 
 # ------ 力計算 (Lennard-Jones) ------
@@ -39,10 +39,9 @@ def compute_forces(positions):
     for i in range(Natoms - 1):
         ri = positions[i]
         rij = positions[i+1:] - ri
-        # 最近接画像法 (周期境界条件)
         rij -= boxL * np.rint(rij / boxL)
         dist2 = np.sum(rij**2, axis=1)
-        mask = (dist2 < rc2) & (dist2 > 0)  # dist=0 のペアを除外
+        mask = (dist2 < rc2) & (dist2 > 0)
         rij = rij[mask]; dist2 = dist2[mask]
         if dist2.size == 0:
             continue
@@ -56,40 +55,82 @@ def compute_forces(positions):
         pot += 4*epsilon * np.sum(inv_r12 - inv_r6)
     return forces, pot
 
+# ------ 動径分布関数 g(r) 計算 ------
+def compute_rdf(positions, boxL, n_bins=50, r_max=None):
+    if r_max is None:
+        r_max = boxL / 2.0
+    
+    n_atoms = len(positions)
+    rho = n_atoms / boxL**3  # 数密度
+    
+    distances = []
+    for i in range(n_atoms):
+        rij = positions[i+1:] - positions[i]
+        rij -= boxL * np.rint(rij / boxL)
+        dist = np.linalg.norm(rij, axis=1)
+        distances.extend(dist)
+    
+    distances = np.array(distances)
+    
+    # ヒストグラム作成
+    hist, bin_edges = np.histogram(distances, bins=n_bins, range=(0, r_max))
+    r = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    dr = r[1] - r[0]
+    
+    # 正規化
+    shell_volume = 4.0 * np.pi * r**2 * dr
+    n_ideal = shell_volume * rho
+    
+    # N(N-1)/2 で割るべきだが、ここでは N で割ることでペア数を考慮
+    g_r = hist / (n_ideal * n_atoms * 0.5)
+    
+    return r, g_r
+
 # ------ データ保存用配列 ------
 snapshots = []
 msd_list   = []
+rdf_list = []
 
 # ------ MD ループ ------
-for T in temps:
-    # ベルレ積分器
+print("Starting MD simulation...")
+for i, T in enumerate(temps):
     for step in range(steps_per_T):
         forces, pot = compute_forces(pos)
         vel += 0.5 * forces / mass * dt
-        vel = np.clip(vel, -100.0, 100.0) # 速度に上限を設定して発散を防ぐ
+        vel = np.clip(vel, -100.0, 100.0)
 
         pos += vel * dt
-        pos %= boxL  # 周期境界
+        pos %= boxL
 
         forces, pot = compute_forces(pos)
         vel += 0.5 * forces / mass * dt
-        vel = np.clip(vel, -100.0, 100.0) # 速度に上限を設定して発散を防ぐ
+        vel = np.clip(vel, -100.0, 100.0)
 
-        # 瞬時温度から rescale (単純な加熱サーモスタット)
         kin = 0.5 * mass * np.sum(vel**2)
         current_T = (2*kin)/(3*Natoms)
-        # current_Tがゼロに近づくと発散するため、微小量を加えて安定化
         vel *= np.sqrt(T / (current_T + 1e-9))
 
-        # スナップショット
         if step % record_interval == 0:
             snapshots.append(pos.copy())
-            # MSD: 固体 → 小, 液体 → 大
-            disp = np.linalg.norm(pos - pos.mean(axis=0), axis=1)
-            msd_list.append(np.mean(disp**2))
+            
+            displacement = pos - pos_initial
+            displacement -= boxL * np.rint(displacement / boxL)
+            squared_disp = np.sum(displacement**2, axis=1)
+            msd_list.append(np.mean(squared_disp))
+            
+            r_axis, g_r = compute_rdf(pos, boxL)
+            rdf_list.append(g_r)
+    
+    print(f"Finished T = {T:.2f} ({i+1}/{len(temps)})")
 
-print(f"saved {len(snapshots)} frames")
+print(f"Saved {len(snapshots)} frames")
 
 np.save(data_dir / "frames.npy", np.array(snapshots))
 np.save(data_dir / "temps.npy", temps.repeat(steps_per_T//record_interval))
 np.save(data_dir / "msd.npy",  np.array(msd_list))
+np.save(data_dir / "rdfs.npy", np.array(rdf_list))
+np.save(data_dir / "rdf_r_axis.npy", r_axis)
+
+print("Precomputation finished.")
+print(f"Data saved in '{data_dir}' directory.")
+print("To run the demo, execute: streamlit run app.py")
