@@ -6,7 +6,7 @@ from pathlib import Path
 Ncell = 6            # 立方格子の単位胞数 (N^3 原子)
 a = 1.0              # 格子定数
 mass = 1.0           # 原子質量 (LJ 単位)
-dt = 0.002           # タイムステップ
+dt = 0.001           # タイムステップ (小さくして安定化)
 steps_per_T = 400    # 各温度での MD ステップ
 record_interval = 50 # スナップショット間隔
 temps = np.linspace(0.2, 2.0, 40)  # 融解(~1.2)をまたぐ昇温
@@ -42,14 +42,15 @@ def compute_forces(positions):
         # 最近接画像法 (周期境界条件)
         rij -= boxL * np.rint(rij / boxL)
         dist2 = np.sum(rij**2, axis=1)
-        mask = dist2 < rc2
+        mask = (dist2 < rc2) & (dist2 > 0)  # dist=0 のペアを除外
         rij = rij[mask]; dist2 = dist2[mask]
         if dist2.size == 0:
             continue
         inv_r2 = sigma**2 / dist2
         inv_r6 = inv_r2**3
         inv_r12 = inv_r6**2
-        fij = 24 * epsilon * (2*inv_r12 - inv_r6) * sigma**-2 * rij / dist2[:,None]
+        f_scalar = 24 * epsilon * (2*inv_r12 - inv_r6) / dist2
+        fij = f_scalar[:, np.newaxis] * rij
         forces[i] += np.sum(fij, axis=0)
         forces[i+1:][mask] -= fij
         pot += 4*epsilon * np.sum(inv_r12 - inv_r6)
@@ -65,15 +66,20 @@ for T in temps:
     for step in range(steps_per_T):
         forces, pot = compute_forces(pos)
         vel += 0.5 * forces / mass * dt
+        vel = np.clip(vel, -100.0, 100.0) # 速度に上限を設定して発散を防ぐ
+
         pos += vel * dt
         pos %= boxL  # 周期境界
+
         forces, pot = compute_forces(pos)
         vel += 0.5 * forces / mass * dt
+        vel = np.clip(vel, -100.0, 100.0) # 速度に上限を設定して発散を防ぐ
 
         # 瞬時温度から rescale (単純な加熱サーモスタット)
         kin = 0.5 * mass * np.sum(vel**2)
         current_T = (2*kin)/(3*Natoms)
-        vel *= np.sqrt(T / current_T)
+        # current_Tがゼロに近づくと発散するため、微小量を加えて安定化
+        vel *= np.sqrt(T / (current_T + 1e-9))
 
         # スナップショット
         if step % record_interval == 0:
