@@ -24,19 +24,20 @@ k = np.linspace(-np.pi, np.pi, Nk)
 
 # 材料に応じたバンド構造と化学ポテンシャルの設定
 if material.startswith("Cu"):
-    # 金属：1バンドモデル
+    # 金属：1バンドモデル（cosモデルでバンド端のDOSが高いことを示す）
     Eg = 0.0
     E_bands = [-2 * t * np.cos(k)]
-    mu = 0.0 + 0.5 * doping  # ドーピングでフェルミ準位が少し動く
+    mu = 0.0 + 0.5 * doping
     E_range = (-3, 3)
 else:
-    # 半導体：2バンドモデル
+    # 半導体：より現実に近い放物線モデル
     Eg = 1.1  # Siのバンドギャップ (eV)
-    Ev = -Eg/2 - 0.5 * t * np.cos(k) # 価電子帯
-    Ec = +Eg/2 + 0.5 * t * np.cos(k) # 伝導帯
+    parabolic_const = t / (np.pi**2) * 2.0 # バンドの曲率を調整
+    Ev = -Eg/2 - parabolic_const * k**2  # 価電子帯
+    Ec = +Eg/2 + parabolic_const * k**2  # 伝導帯
     E_bands = [Ev, Ec]
-    mu = 0.0 + 0.6 * doping * Eg  # ドーピングで化学ポテンシャルがギャップ内を動く
-    E_range = (-2, 2)
+    mu = 0.0 + 0.6 * doping * Eg
+    E_range = (-2.5, 2.5)
 
 # --- 計算関数 ---
 def fermi(E, mu, T):
@@ -44,7 +45,6 @@ def fermi(E, mu, T):
     if T == 0:
         return (E < mu).astype(float)
     beta = 1.0 / (kB * T)
-    # expの引数が大きくなりすぎないようにクリップしてオーバーフローを防ぐ
     arg = np.clip((E - mu) * beta, -500, 500)
     return 1.0 / (np.exp(arg) + 1.0)
 
@@ -58,9 +58,10 @@ for E_band in E_bands:
     hist, _ = np.histogram(E_band, bins=n_bins, range=E_range)
     dos_total += hist
 
-# 見栄えのためにガウシアンフィルタで平滑化
-dos_total = gaussian_filter1d(dos_total.astype(float), sigma=2.5)
-dos_total = dos_total / dos_total.max() * 100 # 正規化
+# ガウシアンフィルタで平滑化（sigmaを小さくしてギャップを明確に）
+dos_total = gaussian_filter1d(dos_total.astype(float), sigma=1.5)
+if dos_total.max() > 0:
+    dos_total = dos_total / dos_total.max() * 100 # 正規化
 
 # フェルミ分布と占有されている状態密度
 f_dist = fermi(E_grid, mu, T)
@@ -72,6 +73,16 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("状態密度 (DOS)")
     fig_dos = go.Figure()
+
+    # バンドギャップの領域をハイライト
+    if material.startswith("Si"):
+        fig_dos.add_hrect(y0=-Eg/2, y1=Eg/2,
+                          fillcolor="rgba(128, 128, 128, 0.15)",
+                          line_width=0,
+                          annotation_text="バンドギャップ",
+                          annotation_position="top left",
+                          annotation_font_size=12)
+
     # 全状態密度
     fig_dos.add_trace(go.Scatter(x=dos_total, y=E_grid, name="全状態 (電子のイス)",
                                  line=dict(color="lightgrey", width=2)))
@@ -107,15 +118,15 @@ st.metric("化学ポテンシャル μ", f"{mu:.3f} eV")
 
 if material.startswith("Si"):
     # 伝導帯の電子数と価電子帯の正孔数を計算（簡易）
-    cond_mask = E_grid > (Eg/2 - 0.1) # 伝導帯下部からの寄与
-    vale_mask = E_grid < (-Eg/2 + 0.1) # 価電子帯上部からの寄与
-    
+    cond_mask = E_grid > (Eg/2)
+    vale_mask = E_grid < (-Eg/2)
+
     n_e = np.trapz(dos_occupied[cond_mask], E_grid[cond_mask])
     p_h = np.trapz(dos_total[vale_mask] * (1 - f_dist[vale_mask]), E_grid[vale_mask])
     carrier_text = f"伝導電子密度 (相対値): {n_e/100:.3f}  |  正孔密度 (相対値): {p_h/100:.3f}"
     st.metric("バンドギャップ Eg", f"{Eg:.2f} eV")
 else:
-    carrier_text = "金��は常に多数の伝導電子を持つ"
+    carrier_text = "金属は常に多数の伝導電子を持つ"
 
 st.info(carrier_text)
 st.caption("※単純化した1次元モデルです。実際のSiは間接ギャップ、Cuは複雑なバンド構造を持ちますが、金属と半導体の本質的な違いを理解するために簡約化しています。")
