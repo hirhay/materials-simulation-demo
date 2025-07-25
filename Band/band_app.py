@@ -111,9 +111,12 @@ with col2:
     fig_carrier = go.Figure()
     if material.startswith("Si"):
         T_range, n_e, p_h = calculate_carriers_vs_temp(doping)
-        fig_carrier.add_trace(go.Scatter(x=T_range, y=n_e, name="電子 (n_e)", line=dict(color="#F28E2B", width=3)))
-        fig_carrier.add_trace(go.Scatter(x=T_range, y=p_h, name="正孔 (p_h)", line=dict(color="#4E79A7", width=3)))
-        fig_carrier.update_yaxes(type="log", range=[-1, 2.5], title_text="キャリア濃度 (任意単位)")
+        # log(0)を避けるため、また微小な値を表示するため微小量を加算
+        epsilon = 1e-9
+        fig_carrier.add_trace(go.Scatter(x=T_range, y=n_e + epsilon, name="電子 (n_e)", line=dict(color="#F28E2B", width=3)))
+        fig_carrier.add_trace(go.Scatter(x=T_range, y=p_h + epsilon, name="正孔 (p_h)", line=dict(color="#4E79A7", width=3)))
+        # y軸の表示範囲を広げ、小さい値も見えるようにする
+        fig_carrier.update_yaxes(type="log", range=[-5, 3], title_text="キャリア濃度 (任意単位)")
         fig_carrier.add_vline(x=T_slider, line=dict(color="black", dash="dash"), annotation_text=f"T = {T_slider} K")
     else: # 金属の場合
         fig_carrier.add_annotation(text="金属は常に高濃度のキャリアを持つ", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False, font_size=16)
