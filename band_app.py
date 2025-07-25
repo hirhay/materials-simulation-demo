@@ -1,104 +1,121 @@
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
+from scipy.ndimage import gaussian_filter1d
 
-st.set_page_config(page_title="簡易バンド構造ビューア", layout="wide")
+st.set_page_config(page_title="金属と半導体の電子状態", layout="wide")
 
-st.title("金属と半導体のバンド構造を体験しよう")
+st.title("金属と半導体の電子状態を体験しよう")
+st.write("材料や温度を変えると、電子がどのようにエネルギー準位を占有するかが変化します。特に半導体では、温度を上げると電子が伝導帯にジャンプし、電気が流れるようになります。")
 
-# 物理定数
+# --- サイドバー：パラメータ設定 ---
+st.sidebar.header("パラメータ設定")
+material = st.sidebar.selectbox("材料を選ぶ", ["Si (半導体)", "Cu (金属)"])
+T = st.sidebar.slider("温度 T [K]", 0, 800, 300, step=10)
+doping = st.sidebar.slider("ドーピング（p型 ← 0 → n型）", -1.0, 1.0, 0.0, 0.1)
+
+# --- 物理定数とモデル ---
 kB = 8.617333e-5  # eV/K
+t = 1.0  # ホッピングパラメータ
 
-# パラメータ設定UI
-material = st.selectbox("材料を選ぶ", ["Si (半導体)", "Cu (金属)"])
-T = st.slider("温度 T [K]", 0, 800, 300, step=25)
-doping = st.slider("ドーピング（p型 ← 0 → n型）", -1.0, 1.0, 0.0, 0.1)
-
-# k点
-Nk = 400
+# 1次元のk点
+Nk = 500
 k = np.linspace(-np.pi, np.pi, Nk)
 
-# モデルパラメータ
-t = 1.0
+# 材料に応じたバンド構造と化学ポテンシャルの設定
 if material.startswith("Cu"):
-    # 金属：1バンド
+    # 金属：1バンドモデル
     Eg = 0.0
-    E_bands = [ -2*t * np.cos(k) ]  # list of arrays
-    labels = ["バンド"]
-    # フェルミ準位（dopingで少し上下させる）
-    mu0 = 0.0
-    mu = mu0 + 0.5 * doping  # 簡易シフト
+    E_bands = [-2 * t * np.cos(k)]
+    mu = 0.0 + 0.5 * doping  # ドーピングでフェルミ準位が少し動く
+    E_range = (-3, 3)
 else:
-    # Si: ギャップEgと2バンド
-    Eg = 1.1  # eV（簡易）
-    Ev = -Eg/2 - 2*t*np.cos(k)
-    Ec = +Eg/2 + 2*t*np.cos(k)
+    # 半導体：2バンドモデル
+    Eg = 1.1  # Siのバンドギャップ (eV)
+    Ev = -Eg/2 - 0.5 * t * np.cos(k) # 価電子帯
+    Ec = +Eg/2 + 0.5 * t * np.cos(k) # 伝導帯
     E_bands = [Ev, Ec]
-    labels = ["価電子帯", "伝導帯"]
-    # mid-gap を基準にドーピングで化学ポテンシャル移動
-    mu = 0.0 + 0.5*doping*Eg  # -Eg/2～+Eg/2 付近を遷移
+    mu = 0.0 + 0.6 * doping * Eg  # ドーピングで化学ポテンシャルがギャップ内を動く
+    E_range = (-2, 2)
 
-# Fermi-Dirac 分布
+# --- 計算関数 ---
 def fermi(E, mu, T):
+    """フェルミ・ディラック分布関数"""
     if T == 0:
         return (E < mu).astype(float)
-    beta = 1.0 / (kB*T)
-    return 1.0 / (np.exp((E - mu)*beta) + 1.0)
+    beta = 1.0 / (kB * T)
+    # expの引数が大きくなりすぎないようにクリップしてオーバーフローを防ぐ
+    arg = np.clip((E - mu) * beta, -500, 500)
+    return 1.0 / (np.exp(arg) + 1.0)
 
-occupations = [fermi(E, mu, T) for E in E_bands]
+# エネルギーグリッド上で各種量を計算
+n_bins = 400
+E_grid = np.linspace(E_range[0], E_range[1], n_bins)
 
-# キャリア密度（超簡易）：半導体なら伝導帯占有 - 価電子帯空孔
-if material.startswith("Si"):
-    n_e = np.trapz(occupations[1], k)/(2*np.pi)     # 電子数(相対)
-    p_h = np.trapz(1 - occupations[0], k)/(2*np.pi) # 正孔数(相対)
-    carrier_text = f"電子密度 ~ {n_e:.3f}, 正孔密度 ~ {p_h:.3f}"
-else:
-    n_tot = np.trapz(occupations[0], k)/(2*np.pi)
-    carrier_text = f"占有電子数(相対) ~ {n_tot:.3f}"
+# 状態密度(DOS)を計算
+dos_total = np.zeros_like(E_grid)
+for E_band in E_bands:
+    hist, _ = np.histogram(E_band, bins=n_bins, range=E_range)
+    dos_total += hist
 
-# プロット
-fig = go.Figure()
-colors = ["#4E79A7", "#F28E2B"]
+# 見栄えのためにガウシアンフィルタで平滑化
+dos_total = gaussian_filter1d(dos_total.astype(float), sigma=2.5)
+dos_total = dos_total / dos_total.max() * 100 # 正規化
 
-for i, (E, occ, lab) in enumerate(zip(E_bands, occupations, labels)):
-    # 線の透明度で占有を表現（0→薄い,1→濃い）
-    alpha = 0.2 + 0.8*occ  # 0.2～1.0
-    # 線を細切れに描く：占有度ごとにcolor RGBA
-    for j in range(Nk-1):
-        fig.add_trace(go.Scatter(
-            x=k[j:j+2], y=E[j:j+2],
-            mode="lines",
-            line=dict(color=f"rgba({78 if i==0 else 242}, {121 if i==0 else 142}, {167 if i==0 else 43}, {alpha[j]:.3f})", width=3),
-            showlegend=False
-        ))
-    # 凡例用ダミー
-    fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines",
-                             line=dict(color=colors[i], width=3),
-                             name=lab))
+# フェルミ分布と占有されている状態密度
+f_dist = fermi(E_grid, mu, T)
+dos_occupied = dos_total * f_dist
 
-# フェルミ準位
-fig.add_hline(y=mu, line=dict(color="black", dash="dash"), annotation_text="μ (Fermi)", annotation_position="top left")
-
-# ギャップ表示
-if Eg > 0:
-    fig.add_shape(type="rect",
-                  x0=k[0], x1=k[-1], y0=-Eg/2, y1=+Eg/2,
-                  fillcolor="lightgrey", opacity=0.15, line_width=0)
-
-fig.update_layout(
-    xaxis_title="k（1次元ブリルアンゾーン）",
-    yaxis_title="エネルギー E [eV]",
-    margin=dict(l=10, r=10, t=30, b=10),
-    height=500
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
+# --- 描画 ---
 col1, col2 = st.columns(2)
-with col1:
-    st.metric("バンドギャップ Eg", f"{Eg:.2f} eV")
-with col2:
-    st.metric("化学ポテンシャル μ", f"{mu:.2f} eV")
 
-st.write(carrier_text)
-st.caption("※単純化したモデル。実際のSiは間接ギャップ、Cuは複雑な多バンドですが、原理理解のために簡約化しています。")
+with col1:
+    st.subheader("状態密度 (DOS)")
+    fig_dos = go.Figure()
+    # 全状態密度
+    fig_dos.add_trace(go.Scatter(x=dos_total, y=E_grid, name="全状態 (電子のイス)",
+                                 line=dict(color="lightgrey", width=2)))
+    # 占有状態密度
+    fig_dos.add_trace(go.Scatter(x=dos_occupied, y=E_grid, name="占有状態 (座っている電子)",
+                                 fill='tozerox', line=dict(color="#4E79A7"),
+                                 fillcolor="rgba(78, 121, 167, 0.6)"))
+    # フェルミ準位
+    fig_dos.add_hline(y=mu, line=dict(color="black", dash="dash"),
+                      annotation_text="μ (化学ポテンシャル)", annotation_position="bottom right")
+    fig_dos.update_layout(xaxis_title="状態の数 (任意単位)", yaxis_title="エネルギー E [eV]",
+                          margin=dict(l=10, r=10, t=40, b=10), height=500, showlegend=True,
+                          legend=dict(x=0.05, y=0.95))
+    fig_dos.update_yaxes(range=E_range)
+    st.plotly_chart(fig_dos, use_container_width=True)
+
+with col2:
+    st.subheader("フェルミ分布関数 f(E)")
+    fig_fermi = go.Figure()
+    fig_fermi.add_trace(go.Scatter(x=f_dist, y=E_grid, name="f(E)",
+                                   line=dict(color="#F28E2B", width=3)))
+    # フェルミ準位
+    fig_fermi.add_hline(y=mu, line=dict(color="black", dash="dash"),
+                        annotation_text="μ", annotation_position="bottom right")
+    fig_fermi.update_layout(xaxis_title="占有確率", yaxis_title="エネルギー E [eV]",
+                            margin=dict(l=10, r=10, t=40, b=10), height=500,
+                            xaxis_range=[-0.05, 1.05])
+    fig_fermi.update_yaxes(range=E_range)
+    st.plotly_chart(fig_fermi, use_container_width=True)
+
+# --- サマリー表示 ---
+st.metric("化学ポテンシャル μ", f"{mu:.3f} eV")
+
+if material.startswith("Si"):
+    # 伝導帯の電子数と価電子帯の正孔数を計算（簡易）
+    cond_mask = E_grid > (Eg/2 - 0.1) # 伝導帯下部からの寄与
+    vale_mask = E_grid < (-Eg/2 + 0.1) # 価電子帯上部からの寄与
+    
+    n_e = np.trapz(dos_occupied[cond_mask], E_grid[cond_mask])
+    p_h = np.trapz(dos_total[vale_mask] * (1 - f_dist[vale_mask]), E_grid[vale_mask])
+    carrier_text = f"伝導電子密度 (相対値): {n_e/100:.3f}  |  正孔密度 (相対値): {p_h/100:.3f}"
+    st.metric("バンドギャップ Eg", f"{Eg:.2f} eV")
+else:
+    carrier_text = "金��は常に多数の伝導電子を持つ"
+
+st.info(carrier_text)
+st.caption("※単純化した1次元モデルです。実際のSiは間接ギャップ、Cuは複雑なバンド構造を持ちますが、金属と半導体の本質的な違いを理解するために簡約化しています。")
