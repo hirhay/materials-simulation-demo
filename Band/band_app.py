@@ -111,7 +111,7 @@ with col2:
         T_range, n_e, p_h = calculate_carriers_vs_temp(doping)
         epsilon = 1e-9 # log(0)を避けるための微小量
         fig_carrier.add_trace(go.Scatter(x=T_range, y=n_e + epsilon, name="電子 (n_e)", line=dict(color="#F28E2B", width=3)))
-        fig_carrier.add_trace(go.Scatter(x=T_range, y=p_h + epsilon, name="正孔 (p_h)", line=dict(color="#4E79A7", width=3)))
+        fig_carrier.add_trace(go.Scatter(x=T_range, y=p_h + epsilon, name="正孔 (p_h)", line=dict(color="#4E79A7", width=3, dash='dash')))
         fig_carrier.update_yaxes(type="log", range=[-5, 3], title_text="キャリア濃度 (任意単位)")
         fig_carrier.add_vline(x=T_slider, line=dict(color="black", dash="dash"), annotation_text=f"T = {T_slider} K")
     else: # 金属の場合
