@@ -24,29 +24,37 @@ k = np.linspace(-np.pi, np.pi, Nk)
 
 # 材料に応じたバンド構造と化学ポテンシャルの設定
 if material.startswith("Cu"):
-    # 金属：1バンドモデル（cosモデルでバンド端のDOSが高いことを示す）
+    # 金属：1バンドモデル（cosモデル）
     Eg = 0.0
     E_bands = [-2 * t * np.cos(k)]
     mu = 0.0 + 0.5 * doping
     E_range = (-3, 3)
+    dos_model = 'histogram'
 else:
-    # 半導体：より現実に近い放物線モデル
+    # 半導体：視覚的に分かりやすい半楕円モデル
     Eg = 1.1  # Siのバンドギャップ (eV)
-    parabolic_const = t / (np.pi**2) * 2.0 # バンドの曲率を調整
-    Ev = -Eg/2 - parabolic_const * k**2  # 価電子帯
-    Ec = +Eg/2 + parabolic_const * k**2  # 伝導帯
-    E_bands = [Ev, Ec]
-    mu = 0.0 + 0.6 * doping * Eg
     E_range = (-2.5, 2.5)
+    dos_model = 'ellipse'
+    
+    # 純粋なSiでも温度でキャリアが生まれることを見せるための教育的な補正
+    # 温度が上がると化学ポテンシャルがわずかに上昇し、伝導帯の電子占有を促す
+    mu_intrinsic = 0.15 * (T / 800.0)**2 * Eg
+    mu_doping = 0.6 * doping * Eg
+    mu = mu_intrinsic + mu_doping
 
 # --- 計算関数 ---
 def fermi(E, mu, T):
     """フェルミ・ディラック分布関数"""
-    if T == 0:
+    if T <= 0:
         return (E < mu).astype(float)
     beta = 1.0 / (kB * T)
     arg = np.clip((E - mu) * beta, -500, 500)
     return 1.0 / (np.exp(arg) + 1.0)
+
+def get_elliptical_dos(E_grid, center, width, height):
+    """半楕円形状の状態密度を生成する"""
+    dos = np.sqrt(np.maximum(0, 1 - ((E_grid - center) / width)**2)) * height
+    return dos
 
 # エネルギーグリッド上で各種量を計算
 n_bins = 400
@@ -54,12 +62,15 @@ E_grid = np.linspace(E_range[0], E_range[1], n_bins)
 
 # 状態密度(DOS)を計算
 dos_total = np.zeros_like(E_grid)
-for E_band in E_bands:
-    hist, _ = np.histogram(E_band, bins=n_bins, range=E_range)
-    dos_total += hist
+if dos_model == 'histogram':
+    for E_band in E_bands:
+        hist, _ = np.histogram(E_band, bins=n_bins, range=E_range)
+        dos_total += hist
+    dos_total = gaussian_filter1d(dos_total.astype(float), sigma=1.5)
+else: # ellipse model
+    dos_total += get_elliptical_dos(E_grid, center=-Eg/2 - 0.7, width=1.4, height=100) # 価電子帯
+    dos_total += get_elliptical_dos(E_grid, center= Eg/2 + 0.7, width=1.4, height=100) # 伝導帯
 
-# ガウシアンフィルタで平滑化（sigmaを小さくしてギャップを明確に）
-dos_total = gaussian_filter1d(dos_total.astype(float), sigma=1.5)
 if dos_total.max() > 0:
     dos_total = dos_total / dos_total.max() * 100 # 正規化
 
