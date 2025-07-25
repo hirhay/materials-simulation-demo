@@ -37,7 +37,6 @@ else:
     dos_model = 'ellipse'
     
     # 純粋なSiでも温度でキャリアが生まれることを見せるための教育的な補正
-    # 温度が上がると化学ポテンシャルがわずかに上昇し、伝導帯の電子占有を促す
     mu_intrinsic = 0.15 * (T / 800.0)**2 * Eg
     mu_doping = 0.6 * doping * Eg
     mu = mu_intrinsic + mu_doping
@@ -51,9 +50,9 @@ def fermi(E, mu, T):
     arg = np.clip((E - mu) * beta, -500, 500)
     return 1.0 / (np.exp(arg) + 1.0)
 
-def get_elliptical_dos(E_grid, center, width, height):
-    """半楕円形状の状態密度を生成する"""
-    dos = np.sqrt(np.maximum(0, 1 - ((E_grid - center) / width)**2)) * height
+def get_elliptical_dos(E_grid, center, semi_axis, height):
+    """半楕円形状の状態密度を生成する (semi_axisは楕円の半分の幅)"""
+    dos = np.sqrt(np.maximum(0, 1 - ((E_grid - center) / semi_axis)**2)) * height
     return dos
 
 # エネルギーグリッド上で各種量を計算
@@ -68,8 +67,13 @@ if dos_model == 'histogram':
         dos_total += hist
     dos_total = gaussian_filter1d(dos_total.astype(float), sigma=1.5)
 else: # ellipse model
-    dos_total += get_elliptical_dos(E_grid, center=-Eg/2 - 0.7, width=1.4, height=100) # 価電子帯
-    dos_total += get_elliptical_dos(E_grid, center= Eg/2 + 0.7, width=1.4, height=100) # 伝導帯
+    band_width = 1.4
+    # 価電子帯：上端が-Eg/2になるように設定
+    center_v = -Eg/2 - band_width/2
+    dos_total += get_elliptical_dos(E_grid, center=center_v, semi_axis=band_width/2, height=100)
+    # 伝導帯：下端が+Eg/2になるように設定
+    center_c = Eg/2 + band_width/2
+    dos_total += get_elliptical_dos(E_grid, center=center_c, semi_axis=band_width/2, height=100)
 
 if dos_total.max() > 0:
     dos_total = dos_total / dos_total.max() * 100 # 正規化
@@ -132,10 +136,10 @@ if material.startswith("Si"):
     cond_mask = E_grid > (Eg/2)
     vale_mask = E_grid < (-Eg/2)
 
-    n_e = np.trapz(dos_occupied[cond_mask], E_grid[cond_mask])
-    p_h = np.trapz(dos_total[vale_mask] * (1 - f_dist[vale_mask]), E_grid[vale_mask])
+    n_e = np.trapezoid(dos_occupied[cond_mask], E_grid[cond_mask])
+    p_h = np.trapezoid(dos_total[vale_mask] * (1 - f_dist[vale_mask]), E_grid[vale_mask])
     carrier_text = f"伝導電子密度 (相対値): {n_e/100:.3f}  |  正孔密度 (相対値): {p_h/100:.3f}"
-    st.metric("バンドギャップ Eg", f"{Eg:.2f} eV")
+    st.metric("バンドギャ��プ Eg", f"{Eg:.2f} eV")
 else:
     carrier_text = "金属は常に多数の伝導電子を持つ"
 
